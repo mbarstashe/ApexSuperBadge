@@ -1,76 +1,137 @@
 public with sharing class MaintenanceRequestHelper {
-    
     public static String MAINTENANCE = 'Routine Maintenance';
     public static String REPAIR = 'Repair';
     public static String OTHER = 'Other';
     public static String CLOSED = 'Closed';
-    
-    public static void updateWorkOrders(List<Case> newList, Map<Id, Case> oldMap) {
-        // TODO: Complete the method to update workorders
-        Map<Id, Case> reqsToProcess = new Map<Id, Case>();
-        for(Case req: newList){
-            if((req.Type == MAINTENANCE || req.Type == REPAIR) &&
-               req.Status == CLOSED && req.Status != oldMap.get(req.id).Status){
-               		reqsToProcess.put(req.id, req);
-                }
-        }
-        if(reqsToProcess.isEmpty()){
+
+    public void updateWorkOrders(List<Case> newRequestsList, Map<Id, Case> oldRequestsMap) {
+        List<Id> requestIdsToProcess = getRequestIdsForProcessing(newRequestsList, oldRequestsMap);
+        if (requestIdsToProcess.isEmpty()) {
             return;
         }
-        List<Equipment_Maintenance_Item__c> items = [SELECT id, Equipment__c, Equipment__r.Maintenance_Cycle__c, 
-                        Equipment__r.Replacement_Part__c,  Quantity__c,   
-                        Maintenance_Request__c 
-                        FROM Equipment_Maintenance_Item__c
-                       WHERE Maintenance_Request__c in: reqsToProcess.keySet()];
-        Map<Id, Decimal> oldReqToMaintCycle = new Map<Id, Decimal>();
-        for(Equipment_Maintenance_Item__c item: items){
-            Decimal cycle = item.Equipment__r.Maintenance_Cycle__c;
-            if(!oldReqToMaintCycle.containsKey(item.Maintenance_Request__c) ||
-               oldReqToMaintCycle.get(item.Maintenance_Request__c) > cycle){
-                oldReqToMaintCycle.put(item.Maintenance_Request__c, cycle);
-            }  
-                
-        }
-        
-        Map<Id, Case> oldIdToNewMaintReqMap = generateNewMaintReqMap(oldReqToMaintCycle, reqsToProcess);
-        List<Equipment_Maintenance_Item__c> newMaintItems = new List<Equipment_Maintenance_Item__c>();
-		for(Equipment_Maintenance_Item__c item: items){
-            newMaintItems.add(createEqMaintItem(item, oldIdToNewMaintReqMap.get(item.Maintenance_Request__c)));
-        }
-        insert newMaintItems;
-        
-        
-    }   
-    
-    private static Map<ID, Case> generateNewMaintReqMap(Map<Id, Decimal> oldReqToMaintCycle, Map<Id, Case> reqsToProcess){
-        Map<Id, Case> oldIdToNewMaintReqMap = new Map<Id, Case>();
-        for(Id oldCaseId: oldReqToMaintCycle.keySet()){
-            oldIdToNewMaintReqMap.put(oldCaseId, createCase(reqsToProcess.get(oldCaseId), oldReqToMaintCycle.get(oldCaseId)));
-        }
-        insert oldIdToNewMaintReqMap.values();
-        
-        return oldIdToNewMaintReqMap;
-        
+
+        List<Case> requestsWithItemsToProcess = getRequestsWithItemsForProcessing(requestIdsToProcess);
+        Map<Id, Case> oldIdToNewMaintRequestMap = buildNewRequests(requestsWithItemsToProcess);
+        store(oldIdToNewMaintRequestMap.values(), Case.getSObjectType().getDescribe().getLabel());
+        List<Equipment_Maintenance_Item__c> items = buildNewRequestItems(
+            requestsWithItemsToProcess,
+            oldIdToNewMaintRequestMap
+        );
+        store(items, Equipment_Maintenance_Item__c.getSObjectType().getDescribe().getLabel());
     }
-    
-    private static Case createCase(Case oldCase, Decimal cycle){
+
+    private List<Id> getRequestIdsForProcessing(List<Case> newRequestsList, Map<Id, Case> oldRequestsMap) {
+        List<Id> requestIds = new List<Id>();
+        for (Case req : newRequestsList) {
+            if (
+                (req.Type == MAINTENANCE ||
+                req.Type == REPAIR) &&
+                req.Status == CLOSED &&
+                req.Status != oldRequestsMap.get(req.id).Status
+            ) {
+                requestIds.add(req.id);
+            }
+        }
+        return requestIds;
+    }
+
+    private List<Case> getRequestsWithItemsForProcessing(List<Id> requestIds) {
+        return [
+            SELECT
+                Id,
+                Vehicle__c,
+                Subject,
+                (
+                    SELECT
+                        id,
+                        Equipment__c,
+                        Equipment__r.Maintenance_Cycle__c,
+                        Equipment__r.Replacement_Part__c,
+                        Quantity__c,
+                        Maintenance_Request__c
+                    FROM Equipment_Maintenance_Items__r
+                )
+            FROM Case
+            WHERE Id IN :requestIds
+        ];
+    }
+
+    private Map<Id, Case> buildNewRequests(List<Case> oldRequests) {
+        Map<Id, Case> oldIdToNewMaintRequestMap = new Map<Id, Case>();
+
+        for (Case oldRequest : oldRequests) {
+            Case newRequest = createRequest(oldRequest);
+            if (newRequest != null) {
+                oldIdToNewMaintRequestMap.put(oldRequest.Id, newRequest);
+            }
+        }
+        return oldIdToNewMaintRequestMap;
+    }
+
+    private Case createRequest(Case oldRequest) {
+        if (oldRequest.Equipment_Maintenance_Items__r == null || oldRequest.Equipment_Maintenance_Items__r.isEmpty()) {
+            return null;
+        }
         return new Case(
-        subject = oldCase.subject,
-        Vehicle__c = oldCase.Vehicle__c,
-        Type = MAINTENANCE, 
-        Date_Reported__c = System.today(),
-        Date_Due__c = System.today().addDays(Integer.valueOf(cycle)),
-        Status = 'New',
-        ParentId = oldCase.Id);
-        
+            subject = oldRequest.subject,
+            Vehicle__c = oldRequest.Vehicle__c,
+            Type = MAINTENANCE,
+            Date_Reported__c = System.today(),
+            Date_Due__c = getDueDate(oldRequest.Equipment_Maintenance_Items__r),
+            Status = 'New',
+            ParentId = oldRequest.Id
+        );
     }
-    
-    private static Equipment_Maintenance_Item__c createEqMaintItem(Equipment_Maintenance_Item__c oldItem, Case newReq){
+
+    private Date getDueDate(List<Equipment_Maintenance_Item__c> items) {
+        Decimal lowestMaintCycle;
+        for (Equipment_Maintenance_Item__c item : items) {
+            if (lowestMaintCycle == null || item.Equipment__r.Maintenance_Cycle__c < lowestMaintCycle) {
+                lowestMaintCycle = item.Equipment__r.Maintenance_Cycle__c;
+            }
+        }
+
+        return lowestMaintCycle != null ? System.today().addDays(Integer.valueOf(lowestMaintCycle)) : null;
+    }
+
+    private List<Equipment_Maintenance_Item__c> buildNewRequestItems(
+        List<Case> oldRequests,
+        Map<Id, Case> oldIdToNewRequestMap
+    ) {
+        List<Equipment_Maintenance_Item__c> newMaintItems = new List<Equipment_Maintenance_Item__c>();
+        for (Case oldRequest : oldRequests) {
+            if (oldIdToNewRequestMap.containsKey(oldRequest.Id)) {
+                Id newCaseId = oldIdToNewRequestMap.get(oldRequest.Id).Id;
+                for (Equipment_Maintenance_Item__c item : oldRequest.Equipment_Maintenance_Items__r) {
+                    newMaintItems.add(createItem(item, newCaseId));
+                }
+            }
+        }
+        return newMaintItems;
+    }
+
+    private Equipment_Maintenance_Item__c createItem(Equipment_Maintenance_Item__c oldItem, Id newReqId) {
         return new Equipment_Maintenance_Item__c(
-            Maintenance_Request__c = newReq.id,
+            Maintenance_Request__c = newReqId,
             Equipment__c = oldItem.Equipment__c,
             Quantity__c = oldItem.Quantity__c
         );
     }
-    
+
+    private void store(List<sObject> records, String objectName) {
+        Database.SaveResult[] saveResultList = Database.insert(records, false);
+        errorHandling(saveResultList, objectName);
+    }
+
+    private void errorHandling(Database.SaveResult[] saveResultList, String objectName) {
+        for (Database.SaveResult saveRes : saveResultList) {
+            if (!saveRes.isSuccess()) {
+                for (Database.Error error : saveRes.getErrors()) {
+                    System.debug('Error in saving records for ' + objectName + ' : ');
+                    System.debug(error.getStatusCode() + ': ' + error.getMessage());
+                    System.debug(objectName + ' fields caused the error: ' + error.getFields());
+                }
+            }
+        }
+    }
 }
