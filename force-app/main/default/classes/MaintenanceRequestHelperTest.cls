@@ -34,7 +34,7 @@ public class MaintenanceRequestHelperTest {
             FROM Case
             WHERE Vehicle__c = :veh.id AND parentid = :maintReq.Id
         ];
-        system.assert(relatedMaintReqs.size() == 1, 'One maint req should be generated');
+        System.assert(relatedMaintReqs.size() == 1, 'One maint req should be generated');
 
         System.assertEquals(
             Date.today().addDays(20),
@@ -76,7 +76,7 @@ public class MaintenanceRequestHelperTest {
             FROM Case
             WHERE Vehicle__c = :veh.id AND parentid = :maintReq.Id
         ];
-        system.assert(relatedMaintReqs.size() == 0, 'No maint req should be generated, since no lines in original one');
+        System.assert(relatedMaintReqs.size() == 0, 'No maint req should be generated, since no lines in original one');
     }
 
     @isTest
@@ -106,11 +106,11 @@ public class MaintenanceRequestHelperTest {
             FROM Case
             WHERE Vehicle__c = :veh.id AND parentid = :maintReq.Id
         ];
-        system.assert(relatedMaintReqs.size() == 0, 'No maint req should be generated');
+        System.assert(relatedMaintReqs.size() == 0, 'No maint req should be generated');
     }
 
     @isTest
-    private static void testcreateMaintReqMany() {
+    private static void testCreateMaintReqMany() {
         integer size = 300;
         List<Product2> equips = new List<Product2>();
         List<Vehicle__c> vehs = new List<Vehicle__c>();
@@ -150,20 +150,28 @@ public class MaintenanceRequestHelperTest {
             maintReq.Status = 'Closed';
             reqIds.add(maintReq.id);
         }
-        system.debug('maintREq: ' + maintReqs.size());
+
         update maintReqs;
 
         Test.stopTest();
 
         List<Case> relatedMaintReqs = [
-            SELECT Vehicle__c, Type, Date_Reported__c, Date_Due__c
+            SELECT
+                Vehicle__c,
+                Type,
+                Date_Reported__c,
+                Date_Due__c,
+                (SELECT id, Equipment__r.Maintenance_Cycle__c FROM Equipment_Maintenance_Items__r)
             FROM Case
             WHERE parentid IN :reqIds
         ];
-        system.assertEquals(size, relatedMaintReqs.size());
+        System.assertEquals(size, relatedMaintReqs.size());
+
+        for (Case req : relatedMaintReqs) {
+            System.assertEquals(1, req.Equipment_Maintenance_Items__r.size());
+        }
     }
 
-    // implement scheduled code here
     private static Case createCase(
         String subject,
         Vehicle__c vehicle,

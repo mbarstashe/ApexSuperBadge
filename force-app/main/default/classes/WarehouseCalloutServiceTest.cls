@@ -20,7 +20,7 @@ private class WarehouseCalloutServiceTest {
             WHERE Warehouse_SKU__c IN ('100003', '100004')
         ];
 
-        system.assertEquals(2, equipList.size());
+        System.assertEquals(2, equipList.size());
         for (Product2 equip : equipList) {
             if (equip.Warehouse_SKU__c == '100003') {
                 System.assertEquals('Generator 1000 kW', equip.Name);
